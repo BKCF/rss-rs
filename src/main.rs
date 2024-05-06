@@ -1,14 +1,12 @@
 use std::fs::File;
 use std::io::{self,BufRead};
 use std::collections::HashMap;
-use quick_xml::events::attributes::Attributes;
-use quick_xml::name::QName;
-use quick_xml::reader::{Reader};
-use quick_xml::events::{Event};
+use reqwest::Error;
+use tokio::sync::broadcast::error;
 use std::borrow::Cow;
 
-use egui_rss::channel::{Channel, ChannelBuilder, RSSVersion};
-use egui_rss::item::Item;
+use rss_rs::channel::{Channel, ChannelBuilder, RSSVersion};
+use rss_rs::item::Item;
 
 
 #[tokio::main]
@@ -38,133 +36,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_xml_to_channel(rss_string: &String) -> Result<Channel, &'static str>{
-    let mut parser = Reader::from_str(&rss_string);
-    parser.trim_text(true);
+fn parse_xml_to_channel(content: &str) -> Result<Channel, &'static str>{
+    let doc = match roxmltree::Document::parse(content) {
+        Ok(result) => result,
+        Err(_) => return Err("Parse error"),
+    };
 
     let mut channel_builder = ChannelBuilder::new();
 
-    //match rss tag, enusre v2.0  
-    let attributes:HashMap<String, String> = scan_to("rss", &mut parser)?;
-    match attributes.get(&String::from("version")){
-        Some(version) => {
-            //TODO parse this out, no hardcode
-            println!("{version}");
-            if version=="2.0" {
-                channel_builder.set_version(&RSSVersion{ major: 2, minor: 0 });
-            }
-        },
-        None => return Err("no version found"),
+    let rss_tag = match doc.descendants().find(|n| n.has_tag_name("rss")) {
+        Some(elem) => elem,
+        None => return Err("no rss tag")
     };
 
+    //todo make legit
+    channel_builder.set_version(&RSSVersion { major: 2, minor: 0 });
 
-    _ = scan_to("channel", &mut parser)?;
-    let mut inside_tag: bool = false;
-    let mut opened_tag: String = String::from("");
-    let mut opened_tag_depth: i32 = -1;
-    let mut inner_xml: String = String::from("");
-    let mut depth: i32 = 0;
+    let channel_tag = match doc.descendants().find(|n| n.has_tag_name("channel")) {
+        Some(elem) => elem,
+        None => return Err("no channel tag")
+    };
+    let mut iterator = channel_tag.descendants();
+    while let Some(node) = iterator.next() {
+        if channel_tag.descendants().len() <= 0 {break} 
 
-    loop{
-        match parser.read_event(){
-            Ok(Event::End(e)) if e.name().as_ref() == b"channel" =>{
-                let channel:Channel = channel_builder.build()?;
-                return Ok(channel)
-            },
-            Ok(Event::End(e)) => {
-                println!("3{opened_tag}");
-                if depth == opened_tag_depth && opened_tag == String::from_utf8_lossy(e.name().as_ref()){
-                    
-                    if opened_tag == "link"{
-                        channel_builder.set_link(&inner_xml);
-                    }
-                    else if opened_tag == "description"{
-                        channel_builder.set_description(&inner_xml);
-                    }
-                    else if opened_tag == "title"{
-                        channel_builder.set_title(&inner_xml);
-                    }
-                    inside_tag = false;
-                    opened_tag.clear();
-                    inner_xml.clear();
-                    depth -= 1;
-                }
-                else{
-                    return Err("not inside tag, or not a matching close tag. todo split up these errors.");
-                }
+        let k = node.tag_name().name();
+        println!("{k}");
+        if !node.is_element() {continue}
+        
+        if let Some(text) = node.text(){
+            let tag_name = node.tag_name().name();
+
+            if tag_name == "title" {
+                channel_builder.set_title(&String::from(text))
             }
-
-            Ok(Event::Start(ref e)) => {
-                println!("1{opened_tag}");
-
-                opened_tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                inside_tag = true;
-                depth += 1;
-                opened_tag_depth = depth;
-                println!("2{opened_tag}");
-
-                //skip item
-                if opened_tag == "item" {
-                    let _ = parser.read_to_end(QName(b"item"));
-
-                }
-
+            else if tag_name == "link" {
+                channel_builder.set_link(&String::from(text))
             }
-
-            Ok(Event::Text(e)) => {
-                inner_xml = e.unescape().unwrap().into_owned()
-            },
-            Err(_error) => return Err("some error"),
-            Ok(_) => ()
+            else if tag_name == "description" {
+                channel_builder.set_description(&String::from(text))
+            }
+            else if tag_name == "item" {
+                //TODO :3
+            }
         }
+
+
     }
-    
-    //todo fix channel and item defs
 
-    //for each <item> build an Item
-    
+
+    Ok(channel_builder.build()?)
+
+
 }
 
-fn qname_to_string(qname: &QName) -> String{
-    String::from_utf8_lossy(qname.0).to_string()
-}
-
-///Consume XML tags until the specified tag OPEN is found. Returns the tag attributes as a hashmap.
-fn scan_to<'a>(tag: &str, parser:&'a mut quick_xml::Reader<&[u8]>) -> Result<HashMap<String, String>, &'static str>{
-    loop {
-        match parser.read_event(){
-            Ok(Event::Start(e)) => {
-
-                let tag_name = QName(tag.as_bytes());
-                if e.name().eq(&tag_name) {
-                    let mut a_map = HashMap::new();
-                    for a in e.attributes() {
-                        match a {
-                            Ok(kvp) => {
-                                let k:String = qname_to_string(&kvp.key);
-                                let v:String = String::from_utf8_lossy(kvp.value.as_ref()).to_string();
-                                a_map.insert(k,v);
-                            }
-                            Err(_) => {
-                                return Err("Some error lol");
-                            }
-                        }
-                    }
-                    return Ok(a_map);
-                }
-            },
-            Ok(Event::Eof) => {
-                break;
-            },
-            Err(_) => {
-                return Err("Some error lol");
-            },
-            _ => (),
-
-        }
-    }
-    return Err("Some xml parse error lol");
-}
 
 async fn get_text(url: &String) -> reqwest::Result<String>{
     match reqwest::get::<&String>(&url).await{
