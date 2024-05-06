@@ -43,8 +43,8 @@ fn parse_xml_to_channel(rss_string: &String) -> Result<Channel, &'static str>{
     parser.trim_text(true);
 
     let mut channel_builder = ChannelBuilder::new();
-    
-    //match rss tag, enusre v2.0 
+
+    //match rss tag, enusre v2.0  
     let attributes:HashMap<String, String> = scan_to("rss", &mut parser)?;
     match attributes.get(&String::from("version")){
         Some(version) => {
