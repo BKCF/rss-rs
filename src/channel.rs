@@ -10,30 +10,30 @@ pub struct RSSVersion{
 }
 
 #[derive(Debug)]
-pub struct Channel<'a>{
+pub struct Channel{
     //see: https://www.rssboard.org/rss-specification#requiredChannelElements
     pub version: RSSVersion,
     pub title: String,
     pub link: String,
     pub description: String,
-    pub props: HashMap<String, String>,
-    pub items: Vec<&'a Item>
+    // pub props: HashMap<String, String>,
+    pub items: Vec<Item>
 }
 
 #[derive(Debug)]
-pub struct ChannelBuilder<'a>{
+pub struct ChannelBuilder{
     //see: https://www.rssboard.org/rss-specification#requiredChannelElements
     version: Option<RSSVersion>,
     title: Option<String>,
     link: Option<String>,
     description: Option<String>,
-    props: HashMap<String, String>,
-    items: Vec<&'a Item>,
+   // props: HashMap<String, String>,
+    items: Vec<Item>,
 }
 
-impl<'a> ChannelBuilder<'a>{
+impl ChannelBuilder{
     pub fn new() -> Self {
-        Self{version:None, title:None, link:None, description:None, props:HashMap::new(), items:Vec::new()}
+        Self{version:None, title:None, link:None, description:None, items:Vec::new()}
     }
     pub fn set_title(&mut self, title: &String){
         self.title = Some(title.clone());
@@ -47,8 +47,8 @@ impl<'a> ChannelBuilder<'a>{
     pub fn set_version(&mut self, version: &RSSVersion){
         self.version = Some(version.clone());
     }
-    pub fn add_item(&mut self, item: &'a Item){
-        self.items.push(&item);
+    pub fn add_item(&mut self, item: Item){
+        self.items.push(item);
     }
 
    
@@ -65,9 +65,9 @@ impl<'a> ChannelBuilder<'a>{
         }
     }
 
-    pub fn build<'b>(self) -> Result<Channel<'a>, &'static str> {
+    pub fn build(self) -> Result<Channel, &'static str> {
         if self.ready() {
-            return Ok(Channel { version:self.version.unwrap(), title:self.title.unwrap() , link:self.link.unwrap(), description:self.description.unwrap(), props:self.props, items:self.items})
+            return Ok(Channel { version:self.version.unwrap(), title:self.title.unwrap() , link:self.link.unwrap(), description:self.description.unwrap(), items:self.items})
         }
         Err("RSS V2, title, link, and description are required")
     }
