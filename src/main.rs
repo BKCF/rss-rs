@@ -1,13 +1,23 @@
 use std::fs::File;
 use std::io::{self,BufRead};
+use egui::style::default_text_styles;
 use roxmltree::Node;
 
 use rss_rs::channel::{Channel, ChannelBuilder, RSSVersion};
 use rss_rs::item::{Item, ItemBuilder};
 use rss_rs::my_error::MyError;
 
+use eframe::egui;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([400.0,400.0]),
+        ..Default::default()
+    };
+
 
     let urls = read_urls_from_file(&"urls.txt".to_string()).unwrap();
     let mut channels:Vec<Channel> = Vec::new();
@@ -20,7 +30,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => println!("read error for \'{url}\': {error}"),
         }
     }
-    Ok(())
+
+    Ok(eframe::run_simple_native("RSS Reader Deluxe(tm)", options, move |ctx, _frame| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.collapsing("feeds", |ui| {
+                    if ui.button("list").clicked(){
+                        channels.clear();
+                    }
+                    if ui.button("add feed").clicked(){
+                        channels.clear();
+                    }
+                    
+                });
+            });
+            for channel in channels.iter() {
+                for item in channel.items.iter() {
+                    ui.horizontal(|ui| {
+                        let button = egui::Button::new("test").wrap(true);
+                        if ui.add(button).clicked(){
+                            egui::popup::popup_above_or_below_widget(ui, "", widget_response, egui::AboveOrBelow::Above, |ui|{
+                                ui.label(&item.description[0..100]);
+                            });
+                        }
+                    });
+
+                }
+            }
+            
+        });
+    })?)
+
 }
 
 fn parse_xml_to_channel(content: &str) -> Result<Channel, Box<dyn std::error::Error>>{
@@ -49,7 +89,7 @@ fn parse_xml_to_channel(content: &str) -> Result<Channel, Box<dyn std::error::Er
         None => return Err(Box::new(MyError::from_str("No channel tag")))
     };
 
-    let mut iterator = channel_tag.descendants();
+    let mut iterator = channel_tag.children();
     while let Some(node) = iterator.next() {
         if !node.is_element() {continue}
         
@@ -79,7 +119,7 @@ fn parse_xml_to_channel(content: &str) -> Result<Channel, Box<dyn std::error::Er
 fn parse_item(item_tag: &Node) -> Result<Item, Box<dyn std::error::Error>> {
     let mut item_builder = ItemBuilder::new();
 
-    let mut iterator = item_tag.descendants();
+    let mut iterator = item_tag.children();
     while let Some(node) = iterator.next() {
         if !node.is_element() {continue}
         
