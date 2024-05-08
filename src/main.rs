@@ -1,66 +1,127 @@
 use std::fs::File;
 use std::io::{self,BufRead};
-use egui::style::default_text_styles;
+use std::iter::Product;
+use egui::{Align2, Color32, Context, Label, Sense, Window};
 use roxmltree::Node;
 
-use rss_rs::channel::{Channel, ChannelBuilder, RSSVersion};
+use rss_rs::channel::{self, Channel, ChannelBuilder, RSSVersion};
 use rss_rs::item::{Item, ItemBuilder};
 use rss_rs::my_error::MyError;
 
 use eframe::egui;
+use tokio::task;
+use poll_promise::Promise;
 
+#[derive(Debug)]
+pub struct Source {
+    channel: Option<Channel>,
+    url: String,
+}
+async fn read_new_urls(sources:&mut Vec<Source>){
+    // let mut iter = sources.iter();
+    // while let Some(mut source) = iter.next(){
+    for source in sources{
+
+        println!("{source:#?}");
+        if source.channel.is_none() {
+            match get_text(&source.url).await {
+                Ok(content) => {
+                    match parse_xml_to_channel(&content){
+                        Ok(channel) => {
+                         //   println!("{:?}", channel);
+                            source.channel = Some(channel);
+                        },
+                        Err(error) => {
+                            println!("{:?}", error);
+                        },
+                    }
+                },
+                Err(error) => println!("read error for \'{:?}\': {error}", source.url),
+            }
+        }
+        
+    }
+}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([400.0,400.0]),
-        ..Default::default()
-    };
+    let mut sources:Vec<Source> = Vec::new();
 
-
-    let urls = read_urls_from_file(&"urls.txt".to_string()).unwrap();
-    let mut channels:Vec<Channel> = Vec::new();
-
-    let mut iter = urls.iter();
-    while let Some(url) = iter.next(){
-        println!("{url:#?}");
-        match get_text(&url).await {
-            Ok(content) => channels.push(parse_xml_to_channel(&content)?),
-            Err(error) => println!("read error for \'{url}\': {error}"),
-        }
+    for url in read_urls_from_file(&"urls.txt".to_string())? {
+        sources.push(Source { channel: None, url: url });    
     }
 
+    start_app(&mut sources)
+}
+
+fn start_app<'a>(sources:&'a mut Vec<Source>) -> Result<(), Box<dyn std::error::Error>>{
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([800.0,400.0]),
+        ..Default::default()
+    }; 
+   // let promise:poll_promise::Promise<String> = poll_promise::Promise::new();//<String>;
+    let mut open:bool = false;
     Ok(eframe::run_simple_native("RSS Reader Deluxe(tm)", options, move |ctx, _frame| {
         egui::CentralPanel::default().show(ctx, |ui| {
+
+            let promise = Promise::spawn_thread("slow_operation", move || read_new_urls());
+            if let Some(String) = promise.ready() {
+                
+            }
+            
+
             ui.horizontal(|ui| {
                 ui.collapsing("feeds", |ui| {
-                    if ui.button("list").clicked(){
-                        channels.clear();
+                    if ui.button("add new").clicked(){
+                        open = true;
                     }
-                    if ui.button("add feed").clicked(){
-                        channels.clear();
+                    for source in sources.iter() {
+                        if let Some(channel) = source.channel.as_ref() {
+                            ui.label(&channel.title);
+                        }
+                    }
+                    if open {
+                        new_feed_window(&ctx, &mut open, &mut sources);
                     }
                     
                 });
             });
-            for channel in channels.iter() {
-                for item in channel.items.iter() {
-                    ui.horizontal(|ui| {
-                        let button = egui::Button::new("test").wrap(true);
-                        if ui.add(button).clicked(){
-                            egui::popup::popup_above_or_below_widget(ui, "", widget_response, egui::AboveOrBelow::Above, |ui|{
-                                ui.label(&item.description[0..100]);
+            egui::ScrollArea::vertical().show(ui,|ui| {
+                for source in sources.iter() {
+                    if let Some(channel) = source.channel.as_ref() {
+                        for item in channel.items.iter() {
+                            ui.horizontal(|ui|{
+                                ui.label(egui::RichText::new(&channel.title).color(Color32::DARK_GRAY).background_color(Color32::LIGHT_GRAY));
+                                ui.label(egui::RichText::new("::"));
+
+                                let title_label = egui::Label::new(&item.title).selectable(false).sense(Sense::hover());
+                                ui.add(title_label);
                             });
                         }
-                    });
-
+                    }
                 }
-            }
-            
+            });
         });
     })?)
+    //DO NOT TOUCH
+}
 
+
+
+fn new_feed_window(ctx:&Context, open:&mut bool, sources:&mut Vec<Source>) -> Option<egui::InnerResponse<Option<()>>>{
+    let mut text = "".to_owned();
+
+    egui::Window::new("My Window").open(open).default_pos([85.0,20.0]).show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("url");
+            
+            ui.text_edit_singleline(&mut text);    
+            if ui.button("add").clicked() {
+                sources.push(Source{channel:None,url:text});
+            }        
+        });
+     })
 }
 
 fn parse_xml_to_channel(content: &str) -> Result<Channel, Box<dyn std::error::Error>>{
@@ -91,29 +152,30 @@ fn parse_xml_to_channel(content: &str) -> Result<Channel, Box<dyn std::error::Er
 
     let mut iterator = channel_tag.children();
     while let Some(node) = iterator.next() {
-        if !node.is_element() {continue}
-        
-        if let Some(text) = node.text(){
-            let tag_name = node.tag_name().name();
+     //   println!("{:?}", node.tag_name());
+        match node.node_type(){
+            roxmltree::NodeType::Element => {
+                let tag_name = node.tag_name().name();
 
-            if tag_name == "title" {
-                channel_builder.set_title(&String::from(text))
+                if tag_name == "item" {
+                    channel_builder.add_item(parse_item(&node)?);
+                }
+                else if let Some(text) = node.text(){
+                    if tag_name == "title" {
+                        channel_builder.set_title(&String::from(text))
+                    }
+                    else if tag_name == "link" {
+                        channel_builder.set_link(&String::from(text))
+                    }
+                    else if tag_name == "description" {
+                        channel_builder.set_description(&String::from(text))
+                    }
+                }
             }
-            else if tag_name == "link" {
-                channel_builder.set_link(&String::from(text))
-            }
-            else if tag_name == "description" {
-                channel_builder.set_description(&String::from(text))
-            }
-            else if tag_name == "item" {
-                channel_builder.add_item(parse_item(&node)?);
-            }
+            _ => ()
         }
     }
-
     Ok(channel_builder.build()?)
-
-
 }
 
 fn parse_item(item_tag: &Node) -> Result<Item, Box<dyn std::error::Error>> {
@@ -121,7 +183,6 @@ fn parse_item(item_tag: &Node) -> Result<Item, Box<dyn std::error::Error>> {
 
     let mut iterator = item_tag.children();
     while let Some(node) = iterator.next() {
-        if !node.is_element() {continue}
         
         if let Some(text) = node.text(){
             let tag_name = node.tag_name().name();

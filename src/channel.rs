@@ -10,6 +10,7 @@ pub struct RSSVersion{
 }
 
 #[derive(Debug)]
+
 pub struct Channel{
     //see: https://www.rssboard.org/rss-specification#requiredChannelElements
     pub version: RSSVersion,
